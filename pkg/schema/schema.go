@@ -2,6 +2,7 @@ package schema
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,15 +10,14 @@ import (
 	"os"
 	"reflect"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/dadav/go-jsonpointer"
-	"github.com/dadav/helm-schema/pkg/util"
 	"github.com/norwoodj/helm-docs/pkg/helm"
-	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v5"
 	log "github.com/sirupsen/logrus"
+	"github.com/winterRel/helm-schema/pkg/jsonpointer"
+	"github.com/winterRel/helm-schema/pkg/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -299,7 +299,7 @@ func (s *Schema) UnmarshalYAML(node *yaml.Node) error {
 		valueNode := node.Content[i+1]
 		key := keyNode.Value
 
-		if slices.Contains(knownKeys, key) {
+		if Contains(knownKeys, key) {
 			continue
 		}
 
@@ -381,7 +381,7 @@ func (s Schema) Validate() error {
 
 	c := jsonschema.NewCompiler()
 
-	if err := c.AddResource("schema.json", jsonStr); err != nil {
+	if err := c.AddResource("schema.json", bytes.NewReader(jsonStr)); err != nil {
 		// if _, err := jsonschema.CompileString("schema.json", string(jsonStr)); err != nil {
 		return err
 	}
@@ -504,7 +504,7 @@ func NewSkipAutoGenerationConfig(flag []string) (*SkipAutoGenerationConfig, erro
 	var invalidFlags []string
 
 	for _, fieldName := range flag {
-		if !slices.Contains(possibleSkipFields, fieldName) {
+		if !Contains(possibleSkipFields, fieldName) {
 			invalidFlags = append(invalidFlags, fieldName)
 		}
 		if fieldName == "title" {
@@ -559,11 +559,11 @@ func FixRequiredProperties(schema *Schema) error {
 	if schema.Properties != nil {
 		for propName, propValue := range schema.Properties {
 			FixRequiredProperties(propValue)
-			if propValue.Required.Bool && !slices.Contains(schema.Required.Strings, propName) {
+			if propValue.Required.Bool && !Contains(schema.Required.Strings, propName) {
 				schema.Required.Strings = append(schema.Required.Strings, propName)
 			}
 		}
-		if !slices.Contains(schema.Type, "object") {
+		if !Contains(schema.Type, "object") {
 			// If .Properties is set, type must be object
 			schema.Type = []string{"object"}
 		}
@@ -663,7 +663,6 @@ func YamlToSchema(
 	parentRequiredProperties *[]string,
 ) *Schema {
 	schema := NewSchema("object")
-
 	switch node.Kind {
 	case yaml.DocumentNode:
 		if len(node.Content) != 1 {
@@ -681,22 +680,22 @@ func YamlToSchema(
 			&schema.Required.Strings,
 		).Properties
 
-		if _, ok := schema.Properties["global"]; !ok {
-			// global key must be present, otherwise helm lint will fail
-			if schema.Properties == nil {
-				schema.Properties = make(map[string]*Schema)
-			}
-			schema.Properties["global"] = NewSchema(
-				"object",
-			)
-			if !skipAutoGeneration.Title {
-				schema.Properties["global"].Title = "global"
-			}
-			if !skipAutoGeneration.Description {
-				schema.Properties["global"].Description = "Global values are values that can be accessed from any chart or subchart by exactly the same name."
-			}
-		}
-
+		// 不生成Global
+		// if _, ok := schema.Properties["global"]; !ok {
+		// 	// global key must be present, otherwise helm lint will fail
+		// 	if schema.Properties == nil {
+		// 		schema.Properties = make(map[string]*Schema)
+		// 	}
+		// 	schema.Properties["global"] = NewSchema(
+		// 		"object",
+		// 	)
+		// 	if !skipAutoGeneration.Title {
+		// 		schema.Properties["global"].Title = "global"
+		// 	}
+		// 	if !skipAutoGeneration.Description {
+		// 		schema.Properties["global"].Description = "Global values are values that can be accessed from any chart or subchart by exactly the same name."
+		// 	}
+		// }
 		// always disable on top level
 		if !skipAutoGeneration.AdditionalProperties {
 			schema.AdditionalProperties = new(bool)
@@ -720,7 +719,6 @@ func YamlToSchema(
 			if err != nil {
 				log.Fatalf("Error while parsing comment of key %s: %v", keyNode.Value, err)
 			}
-
 			if helmDocsCompatibilityMode {
 				_, helmDocsValue := helm.ParseComment(strings.Split(keyNode.HeadComment, "\n"))
 				if helmDocsValue.Default != "" {
@@ -753,44 +751,49 @@ func YamlToSchema(
 			}
 
 			if keyNodeSchema.Ref != "" {
-				// Check if Ref is a relative file to the values file
-				refParts := strings.Split(keyNodeSchema.Ref, "#")
-				if relFilePath, err := util.IsRelativeFile(valuesPath, refParts[0]); err == nil {
-					var relSchema Schema
-					file, err := os.Open(relFilePath)
-					if err == nil {
-						byteValue, _ := io.ReadAll(file)
-
-						if len(refParts) > 1 {
-							// Found json-pointer
-							var obj interface{}
-							json.Unmarshal(byteValue, &obj)
-							jsonPointerResultRaw, err := jsonpointer.Get(obj, refParts[1])
-							if err != nil {
-								log.Fatal(err)
-							}
-							jsonPointerResultMarshaled, err := json.Marshal(jsonPointerResultRaw)
-							if err != nil {
-								log.Fatal(err)
-							}
-							err = json.Unmarshal(jsonPointerResultMarshaled, &relSchema)
-							if err != nil {
-								log.Fatal(err)
-							}
-						} else {
-							// No json-pointer
-							err = json.Unmarshal(byteValue, &relSchema)
-							if err != nil {
-								log.Fatal(err)
-							}
-						}
-						keyNodeSchema = relSchema
-						keyNodeSchema.HasData = true
-					} else {
-						log.Fatal(err)
-					}
+				if strings.HasPrefix(keyNodeSchema.Ref, "#") {
+					// 说明是一个外部依赖
+					// log.Info(fmt.Sprintf("外部依赖: %s", keyNodeSchema.Ref))
 				} else {
-					log.Debug(err)
+					// Check if Ref is a relative file to the values file
+					refParts := strings.Split(keyNodeSchema.Ref, "#")
+					if relFilePath, err := util.IsRelativeFile(valuesPath, refParts[0]); err == nil {
+						var relSchema Schema
+						file, err := os.Open(relFilePath)
+						if err == nil {
+							byteValue, _ := io.ReadAll(file)
+
+							if len(refParts) > 1 {
+								// Found json-pointer
+								var obj interface{}
+								json.Unmarshal(byteValue, &obj)
+								jsonPointerResultRaw, err := jsonpointer.Get(obj, refParts[1])
+								if err != nil {
+									log.Fatal(err)
+								}
+								jsonPointerResultMarshaled, err := json.Marshal(jsonPointerResultRaw)
+								if err != nil {
+									log.Fatal(err)
+								}
+								err = json.Unmarshal(jsonPointerResultMarshaled, &relSchema)
+								if err != nil {
+									log.Fatal(err)
+								}
+							} else {
+								// No json-pointer
+								err = json.Unmarshal(byteValue, &relSchema)
+								if err != nil {
+									log.Fatal(err)
+								}
+							}
+							keyNodeSchema = relSchema
+							keyNodeSchema.HasData = true
+						} else {
+							log.Fatal(err)
+						}
+					} else {
+						log.Debug(err)
+					}
 				}
 			}
 
@@ -815,7 +818,7 @@ func YamlToSchema(
 
 				// Add key to required array of parent
 				if keyNodeSchema.Required.Bool || (len(keyNodeSchema.Required.Strings) == 0 && !skipAutoGeneration.Required && !keyNodeSchema.HasData) {
-					if !slices.Contains(*parentRequiredProperties, keyNode.Value) {
+					if !Contains(*parentRequiredProperties, keyNode.Value) {
 						*parentRequiredProperties = append(*parentRequiredProperties, keyNode.Value)
 					}
 				}
@@ -943,4 +946,20 @@ func castNodeValueByType(rawValue string, fieldType StringOrArrayOfString) any {
 	}
 
 	return rawValue
+}
+
+// Contains reports whether v is present in s.
+func Contains[S ~[]E, E comparable](s S, v E) bool {
+	return Index(s, v) >= 0
+}
+
+// Index returns the index of the first occurrence of v in s,
+// or -1 if not present.
+func Index[S ~[]E, E comparable](s S, v E) int {
+	for i := range s {
+		if v == s[i] {
+			return i
+		}
+	}
+	return -1
 }

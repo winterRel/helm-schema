@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/dadav/helm-schema/pkg/schema"
+	"github.com/winterRel/helm-schema/pkg/schema"
 )
 
 func searchFiles(startPath, fileName string, queue chan<- string, errs chan<- error) {

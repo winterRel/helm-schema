@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/dadav/helm-schema/pkg/chart"
 	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/winterRel/helm-schema/pkg/chart"
 )
 
 // TopoSort uses topological sorting to sort the results

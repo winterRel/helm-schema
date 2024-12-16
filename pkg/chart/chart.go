@@ -3,7 +3,7 @@ package chart
 import (
 	"io"
 
-	"github.com/dadav/helm-schema/pkg/util"
+	"github.com/winterRel/helm-schema/pkg/util"
 	yaml "gopkg.in/yaml.v3"
 )
 
